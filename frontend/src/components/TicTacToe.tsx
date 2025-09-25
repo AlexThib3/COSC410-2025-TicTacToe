@@ -1,10 +1,14 @@
 import React from "react";
+import { useSuperTicTacToe } from "../SuperTicTacToeContext";
 
 type Player = "X" | "O";
 type Cell = Player | null;
 
 type Props = {
-  onWin?: (winner: Player | "draw" | null) => void;
+  subGameIndex: number;
+  onSubGameEnd: (result: Player | "draw") => void;
+  onMoveMade: (cellIndex: number) => void;
+  disabled?: boolean;
 };
 
 // ----- Backend DTOs -----
@@ -24,7 +28,8 @@ const API_BASE =
 
 
 
-export default function TicTacToe({ onWin }: Props) {
+export default function TicTacToe({ subGameIndex, onSubGameEnd, onMoveMade, disabled = false }: Props) {
+  const { currentPlayer, legalBoards, switchPlayer } = useSuperTicTacToe();
   const [state, setState] = React.useState<GameStateDTO | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -52,27 +57,28 @@ export default function TicTacToe({ onWin }: Props) {
 
   // Notify parent when result changes
   React.useEffect(() => {
-    if (!state || !onWin) return;
-    if (state.winner) onWin(state.winner);
-    else if (state.is_draw) onWin("draw");
-  }, [state?.winner, state?.is_draw]);
+    if (!state) return;
+    if (state.winner) onSubGameEnd(state.winner);
+    else if (state.is_draw) onSubGameEnd("draw");
+  }, [state?.winner, state?.is_draw, onSubGameEnd]);
+
+  const isPlayable = legalBoards.includes(subGameIndex);
 
   async function createGame(): Promise<GameStateDTO> {
     const r = await fetch(`${API_BASE}/tictactoe/new`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ starting_player: "X" }),
     });
     if (!r.ok) throw new Error(`Create failed: ${r.status}`);
     return r.json();
   }
 
-  async function playMove(index: number): Promise<GameStateDTO> {
+  async function playMove(index: number, player: Player): Promise<GameStateDTO> {
     if (!state) throw new Error("No game");
     const r = await fetch(`${API_BASE}/tictactoe/${state.id}/move`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ index }),
+      body: JSON.stringify({ index, player }),
     });
     if (!r.ok) {
       const detail = await r.json().catch(() => ({}));
@@ -82,15 +88,17 @@ export default function TicTacToe({ onWin }: Props) {
   }
 
   async function handleClick(i: number) {
-    if (!state || loading) return;
+    if (!state || loading || !isPlayable || disabled) return;
     // Light client-side guard to avoid noisy 400s:
     if (state.winner || state.is_draw || state.board[i] !== null) return;
 
     setLoading(true);
     setError(null);
     try {
-      const next = await playMove(i);
+      const next = await playMove(i, currentPlayer);
       setState(next);
+      onMoveMade(i);
+      switchPlayer(); // Switch player after every move
     } catch (e: any) {
       setError(e?.message ?? "Move failed");
     } finally {
@@ -133,26 +141,36 @@ export default function TicTacToe({ onWin }: Props) {
   const { board, status } = state;
 
   return (
-    <div className="max-w-sm mx-auto p-4">
-      <div className="text-center mb-2 text-xl font-semibold">{status}</div>
-      <div className="grid grid-cols-3 gap-2">
-        {board.map((c, i) => (
+    <div className={`w-full h-full relative ${!isPlayable ? 'opacity-50' : ''}`}>
+      {/* Tic-tac-toe board lines - darker gray for sub-games */}
+      <div className="absolute inset-0">
+        {/* Horizontal lines */}
+        <div className="absolute w-full h-0.5 bg-gray-500 top-1/3 left-0 transform -translate-y-0.25"></div>
+        <div className="absolute w-full h-0.5 bg-gray-500 top-2/3 left-0 transform -translate-y-0.25"></div>
+        {/* Vertical lines */}
+        <div className="absolute h-full w-0.5 bg-gray-500 left-1/3 top-0 transform -translate-x-0.25"></div>
+        <div className="absolute h-full w-0.5 bg-gray-500 left-2/3 top-0 transform -translate-x-0.25"></div>
+      </div>
+      {/* Game cells */}
+      {board.map((c, i) => {
+        const row = Math.floor(i / 3);
+        const col = i % 3;
+        return (
           <button
             key={i}
-            className="aspect-square rounded-2xl border text-3xl font-bold flex items-center justify-center disabled:opacity-50"
+            className="absolute w-1/3 h-1/3 text-lg font-bold flex items-center justify-center disabled:opacity-50 hover:bg-gray-100"
+            style={{
+              top: `${row * 33.333}%`,
+              left: `${col * 33.333}%`,
+            }}
             onClick={() => handleClick(i)}
             aria-label={`cell-${i}`}
-            disabled={loading || c !== null || state.winner !== null || state.is_draw}
+            disabled={loading || c !== null || state.winner !== null || state.is_draw || !isPlayable || disabled}
           >
             {c}
           </button>
-        ))}
-      </div>
-      <div className="text-center mt-3">
-        <button className="rounded-2xl px-4 py-2 border" onClick={reset} disabled={loading}>
-          New Game
-        </button>
-      </div>
+        );
+      })}
     </div>
   );
 }
